@@ -24,8 +24,11 @@ from .const import (
     CONF_CALENDAR_TYPE,
     CONF_CALENDAR_USERNAME,
     CONF_CALENDAR_PASSWORD,
+    CONF_CALENDAR_COLOR,
+    CONF_CALENDAR_FILTER,
     CALENDAR_TYPE_ICAL,
     CALENDAR_TYPE_CALDAV,
+    CALENDAR_COLORS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -222,8 +225,9 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
         errors: dict = {}
 
         if user_input is not None:
-            name = user_input.get(CONF_CALENDAR_NAME, "").strip()
-            url  = user_input.get(CONF_CALENDAR_URL, "").strip()
+            name  = user_input.get(CONF_CALENDAR_NAME, "").strip()
+            url   = user_input.get(CONF_CALENDAR_URL, "").strip()
+            color = user_input.get(CONF_CALENDAR_COLOR, "#3B82F6")
             if name and url:
                 ok = await self._test_url(url)
                 if not ok:
@@ -231,9 +235,10 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
                 else:
                     self._calendars = [c for c in self._calendars if c["name"] != name]
                     self._calendars.append({
-                        "name": name,
-                        "url":  url,
-                        "type": CALENDAR_TYPE_ICAL,
+                        "name":  name,
+                        "url":   url,
+                        "type":  CALENDAR_TYPE_ICAL,
+                        "color": color,
                     })
                     return self._save()
             else:
@@ -244,6 +249,7 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({
                 vol.Required(CONF_CALENDAR_NAME): str,
                 vol.Required(CONF_CALENDAR_URL): str,
+                vol.Required(CONF_CALENDAR_COLOR, default="#3B82F6"): vol.In(CALENDAR_COLORS),
             }),
             errors=errors,
         )
@@ -257,6 +263,8 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
             url      = user_input.get(CONF_CALENDAR_URL, "").strip()
             username = user_input.get(CONF_CALENDAR_USERNAME, "").strip()
             password = user_input.get(CONF_CALENDAR_PASSWORD, "").strip()
+            color    = user_input.get(CONF_CALENDAR_COLOR, "#3B82F6")
+            cal_filter = user_input.get(CONF_CALENDAR_FILTER, "").strip()
 
             if name and url and username and password:
                 ok = await self._test_caldav(url, username, password)
@@ -270,6 +278,8 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
                         "username": username,
                         "password": password,
                         "type":     CALENDAR_TYPE_CALDAV,
+                        "color":    color,
+                        "filter":   cal_filter,
                     })
                     return self._save()
             else:
@@ -282,6 +292,8 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(CONF_CALENDAR_URL, default="https://caldav.icloud.com"): str,
                 vol.Required(CONF_CALENDAR_USERNAME): str,
                 vol.Required(CONF_CALENDAR_PASSWORD): str,
+                vol.Optional(CONF_CALENDAR_FILTER, default=""): str,
+                vol.Required(CONF_CALENDAR_COLOR, default="#3B82F6"): vol.In(CALENDAR_COLORS),
             }),
             errors=errors,
         )
