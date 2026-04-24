@@ -178,6 +178,10 @@ class HadesCalendarEntity(CoordinatorEntity, CalendarEntity):
         """Fetch iCal URL and filter to the requested date range."""
         import aiohttp
         from icalendar import Calendar
+        from zoneinfo import ZoneInfo
+
+        # Use HA's configured timezone
+        ha_tz = ZoneInfo(self._hass.config.time_zone)
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -198,15 +202,13 @@ class HadesCalendarEntity(CoordinatorEntity, CalendarEntity):
                 _LOGGER.error("iCal parse error: %s", err)
                 return []
 
-            # Get local timezone offset from system
-            local_tz = datetime.now().astimezone().tzinfo
-            # Convert range boundaries to local date safely
+            # Convert range boundaries using HA's timezone
             if start_date.tzinfo is not None:
-                start_d = start_date.astimezone(local_tz).date()
+                start_d = start_date.astimezone(ha_tz).date()
             else:
                 start_d = start_date.date()
             if end_date.tzinfo is not None:
-                end_d = end_date.astimezone(local_tz).date()
+                end_d = end_date.astimezone(ha_tz).date()
             else:
                 end_d = end_date.date()
 
@@ -214,10 +216,10 @@ class HadesCalendarEntity(CoordinatorEntity, CalendarEntity):
                 if component.name != "VEVENT":
                     continue
                 try:
-                    dtstart   = component.get("DTSTART")
-                    dtend     = component.get("DTEND")
-                    summary   = str(component.get("SUMMARY",  "Untitled"))
-                    location  = str(component.get("LOCATION", ""))
+                    dtstart  = component.get("DTSTART")
+                    dtend    = component.get("DTEND")
+                    summary  = str(component.get("SUMMARY",  "Untitled"))
+                    location = str(component.get("LOCATION", ""))
 
                     if dtstart is None:
                         continue
@@ -226,11 +228,11 @@ class HadesCalendarEntity(CoordinatorEntity, CalendarEntity):
                     end_val   = dtend.dt if dtend else None
 
                     if isinstance(start_val, datetime):
-                        # Convert UTC to local time before comparing
+                        # Convert to HA's configured timezone
                         if start_val.tzinfo is not None:
-                            start_val = start_val.astimezone()
+                            start_val = start_val.astimezone(ha_tz)
                         if isinstance(end_val, datetime) and end_val.tzinfo is not None:
-                            end_val = end_val.astimezone()
+                            end_val = end_val.astimezone(ha_tz)
                         elif not isinstance(end_val, datetime):
                             end_val = start_val + timedelta(hours=1)
                         ev_date = start_val.date()
@@ -243,7 +245,6 @@ class HadesCalendarEntity(CoordinatorEntity, CalendarEntity):
                     else:
                         continue
 
-                    # Use local dates on both sides for comparison
                     if not (start_d <= ev_date < end_d):
                         continue
 
