@@ -181,7 +181,7 @@ class HadesChoresCoordinator(DataUpdateCoordinator):
 # ── Calendar Coordinator ──────────────────────────────────────────────────────
 
 class HadesCalendarCoordinator(DataUpdateCoordinator):
-    """Coordinator for iCal calendar feeds."""
+    """Coordinator for iCal and CalDAV calendar feeds."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.calendars: list[dict] = entry.options.get(
@@ -194,12 +194,81 @@ class HadesCalendarCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(minutes=CALENDAR_UPDATE_INTERVAL),
         )
 
-    async def _fetch_ical(self, url: str) -> bytes:
-        """Fetch raw iCal data from URL."""
+    # ── iCal ─────────────────────────────────────────────────────────────────
+
+    async def _fetch_ical_url(self, url: str) -> bytes:
+        """Fetch raw iCal bytes from a URL."""
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 resp.raise_for_status()
                 return await resp.read()
+
+    # ── CalDAV ────────────────────────────────────────────────────────────────
+
+    async def _fetch_caldav(self, url: str, username: str, password: str) -> list[dict]:
+        """Fetch today's events from a CalDAV server."""
+        import caldav
+        from caldav.elements import dav
+
+        def _sync_fetch():
+            today = date.today()
+            start = datetime(today.year, today.month, today.day, 0, 0, 0)
+            end   = datetime(today.year, today.month, today.day, 23, 59, 59)
+
+            client = caldav.DAVClient(
+                url=url,
+                username=username,
+                password=password,
+            )
+            principal = client.principal()
+            calendars = principal.calendars()
+
+            events = []
+            for calendar in calendars:
+                try:
+                    results = calendar.date_search(start=start, end=end, expand=True)
+                    for evt in results:
+                        try:
+                            vevent = evt.vobject_instance.vevent
+                            summary  = str(getattr(vevent, 'summary',  type('', (), {'value': 'Untitled'})()).value)
+                            location = str(getattr(vevent, 'location', type('', (), {'value': ''})()).value)
+                            dtstart  = vevent.dtstart.value
+                            dtend    = getattr(vevent, 'dtend', None)
+                            dtend    = dtend.value if dtend else None
+
+                            if isinstance(dtstart, datetime):
+                                if dtstart.tzinfo:
+                                    dtstart = dtstart.astimezone()
+                                start_str = dtstart.strftime("%-I:%M %p")
+                                end_str   = ""
+                                if isinstance(dtend, datetime):
+                                    if dtend.tzinfo:
+                                        dtend = dtend.astimezone()
+                                    end_str = dtend.strftime("%-I:%M %p")
+                                all_day = False
+                            else:
+                                start_str = "All Day"
+                                end_str   = ""
+                                all_day   = True
+
+                            events.append({
+                                "title":    summary,
+                                "start":    start_str,
+                                "end":      end_str,
+                                "all_day":  all_day,
+                                "location": location,
+                            })
+                        except Exception as err:
+                            _LOGGER.debug("Skipping CalDAV event: %s", err)
+                except Exception as err:
+                    _LOGGER.debug("Skipping CalDAV calendar: %s", err)
+
+            events.sort(key=lambda e: (not e["all_day"], e["start"]))
+            return events
+
+        return await self.hass.async_add_executor_job(_sync_fetch)
+
+    # ── iCal parser ───────────────────────────────────────────────────────────
 
     def _parse_today_events(self, ical_bytes: bytes) -> list[dict]:
         """Parse iCal bytes and return today's events only."""
@@ -209,7 +278,7 @@ class HadesCalendarCoordinator(DataUpdateCoordinator):
             _LOGGER.error("icalendar library not available")
             return []
 
-        today = date.today()
+        today  = date.today()
         events = []
 
         try:
@@ -221,83 +290,88 @@ class HadesCalendarCoordinator(DataUpdateCoordinator):
         for component in cal.walk():
             if component.name != "VEVENT":
                 continue
-
             try:
-                dtstart = component.get("DTSTART")
-                dtend = component.get("DTEND")
-                summary = str(component.get("SUMMARY", "Untitled"))
+                dtstart  = component.get("DTSTART")
+                dtend    = component.get("DTEND")
+                summary  = str(component.get("SUMMARY", "Untitled"))
                 location = str(component.get("LOCATION", ""))
 
                 if dtstart is None:
                     continue
 
                 start_val = dtstart.dt
-                end_val = dtend.dt if dtend else None
+                end_val   = dtend.dt if dtend else None
 
-                # Handle all-day events (date) vs timed events (datetime)
                 if isinstance(start_val, datetime):
-                    # Convert to local date for comparison
                     if start_val.tzinfo is not None:
                         start_date = start_val.astimezone().date()
                     else:
                         start_date = start_val.date()
-                    all_day = False
-                    start_str = start_val.strftime("%I:%M %p").lstrip("0")
-                    end_str = ""
+                    all_day   = False
+                    start_str = start_val.strftime("%-I:%M %p")
+                    end_str   = ""
                     if isinstance(end_val, datetime):
                         if end_val.tzinfo is not None:
                             end_val = end_val.astimezone()
-                        end_str = end_val.strftime("%I:%M %p").lstrip("0")
+                        end_str = end_val.strftime("%-I:%M %p")
                 elif isinstance(start_val, date):
                     start_date = start_val
-                    all_day = True
-                    start_str = "All Day"
-                    end_str = ""
+                    all_day    = True
+                    start_str  = "All Day"
+                    end_str    = ""
                 else:
                     continue
 
                 if start_date != today:
                     continue
 
-                event = {
-                    "title": summary,
-                    "start": start_str,
-                    "end": end_str,
-                    "all_day": all_day,
+                events.append({
+                    "title":    summary,
+                    "start":    start_str,
+                    "end":      end_str,
+                    "all_day":  all_day,
                     "location": location,
-                }
-                events.append(event)
-
+                })
             except Exception as err:
-                _LOGGER.debug("Skipping event due to parse error: %s", err)
-                continue
+                _LOGGER.debug("Skipping event: %s", err)
 
-        # Sort by all-day last, then by start time
         events.sort(key=lambda e: (not e["all_day"], e["start"]))
         return events
 
+    # ── Main update ───────────────────────────────────────────────────────────
+
     async def _async_update_data(self) -> dict:
         """Fetch and parse all calendars."""
+        from .const import CALENDAR_TYPE_CALDAV, CALENDAR_TYPE_ICAL
+
         result: dict = {}
         for cal in self.calendars:
-            name = cal.get("name", "unknown")
-            url = cal.get("url", "")
+            name     = cal.get("name", "unknown")
+            cal_type = cal.get("type", CALENDAR_TYPE_ICAL)
             try:
-                raw = await self._fetch_ical(url)
-                events = await self.hass.async_add_executor_job(
-                    self._parse_today_events, raw
-                )
+                if cal_type == CALENDAR_TYPE_CALDAV:
+                    events = await self._fetch_caldav(
+                        url      = cal.get("url", ""),
+                        username = cal.get("username", ""),
+                        password = cal.get("password", ""),
+                    )
+                else:
+                    raw    = await self._fetch_ical_url(cal.get("url", ""))
+                    events = await self.hass.async_add_executor_job(
+                        self._parse_today_events, raw
+                    )
+
                 result[name] = {
-                    "events": events,
+                    "events":      events,
                     "event_count": len(events),
-                    "url": url,
+                    "type":        cal_type,
                 }
             except Exception as err:
                 _LOGGER.warning("Failed to fetch calendar '%s': %s", name, err)
                 result[name] = {
-                    "events": [],
+                    "events":      [],
                     "event_count": 0,
-                    "url": url,
-                    "error": str(err),
+                    "type":        cal_type,
+                    "error":       str(err),
                 }
         return result
