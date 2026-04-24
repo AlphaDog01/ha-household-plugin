@@ -1,18 +1,23 @@
-"""Constants for Hades Chores integration."""
+"""Constants for Hades Household Integration."""
 
-DOMAIN = "hades_chores"
+DOMAIN = "hades_household"
 
-CONF_HOST = "host"
-CONF_API_KEY = "api_key"
-CONF_SCAN_INTERVAL = "scan_interval"
+# ── Chores ────────────────────────────────────────────────────────────────────
+CONF_CHORES_HOST = "chores_host"
+CONF_CHORES_API_KEY = "chores_api_key"
 CONF_TRACKED_PEOPLE = "tracked_people"
-CONF_ENABLE_TODAY = "enable_today"
-CONF_ENABLE_LEADERBOARD = "enable_leaderboard"
-CONF_ENABLE_UPCOMING = "enable_upcoming"
-CONF_ENABLE_COMPLETION_RATE = "enable_completion_rate"
 
-DEFAULT_SCAN_INTERVAL = 300  # 5 minutes
-DEFAULT_ENABLE_TODAY = True
-DEFAULT_ENABLE_LEADERBOARD = True
-DEFAULT_ENABLE_UPCOMING = False
-DEFAULT_ENABLE_COMPLETION_RATE = True
+CHORES_PEOPLE = ["Caleb", "Cameron", "Courtney", "Dad", "Mom"]
+
+CHORES_UPDATE_INTERVAL = 5  # minutes
+
+# ── Calendars ─────────────────────────────────────────────────────────────────
+CONF_CALENDARS = "calendars"
+CONF_CALENDAR_NAME = "calendar_name"
+CONF_CALENDAR_URL = "calendar_url"
+
+CALENDAR_UPDATE_INTERVAL = 30  # minutes
+
+# ── Coordinator keys ──────────────────────────────────────────────────────────
+COORDINATOR_CHORES = "chores"
+COORDINATOR_CALENDARS = "calendars"

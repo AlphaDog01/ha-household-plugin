@@ -1,4 +1,4 @@
-"""Config flow for Hades Chores integration."""
+"""Config flow for Hades Household Integration."""
 from __future__ import annotations
 
 import logging
@@ -9,266 +9,243 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
+from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
     DOMAIN,
-    CONF_HOST,
-    CONF_API_KEY,
-    CONF_SCAN_INTERVAL,
+    CONF_CHORES_HOST,
+    CONF_CHORES_API_KEY,
     CONF_TRACKED_PEOPLE,
-    CONF_ENABLE_TODAY,
-    CONF_ENABLE_LEADERBOARD,
-    CONF_ENABLE_UPCOMING,
-    CONF_ENABLE_COMPLETION_RATE,
-    DEFAULT_SCAN_INTERVAL,
-    DEFAULT_ENABLE_TODAY,
-    DEFAULT_ENABLE_LEADERBOARD,
-    DEFAULT_ENABLE_UPCOMING,
-    DEFAULT_ENABLE_COMPLETION_RATE,
+    CONF_CALENDARS,
+    CONF_CALENDAR_NAME,
+    CONF_CALENDAR_URL,
+    CHORES_PEOPLE,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _fetch_people(hass, host: str, api_key: str) -> list[dict]:
-    """Fetch people list from the Hades API."""
-    session = async_get_clientsession(hass)
-    headers = {}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    url = f"{host.rstrip('/')}/api/people"
-    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-        resp.raise_for_status()
-        data = await resp.json()
-        return data.get("data", data) if isinstance(data, dict) else data
-
-
-class HadesChoresConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle the config flow for Hades Chores."""
+class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle the config flow for Hades Household Integration."""
 
     VERSION = 1
 
     def __init__(self) -> None:
-        self._host: str = ""
-        self._api_key: str = ""
-        self._scan_interval: int = DEFAULT_SCAN_INTERVAL
-        self._people: list[dict] = []
+        self._data: dict[str, Any] = {}
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.FlowResult:
-        """Step 1: Ask for host + API key."""
-        errors: dict[str, str] = {}
+    async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
+        """Step 1 — Chores API connection."""
+        if self._async_current_entries():
+            return self.async_abort(reason="already_configured")
+
+        errors: dict = {}
 
         if user_input is not None:
-            host = user_input[CONF_HOST].rstrip("/")
-            api_key = user_input.get(CONF_API_KEY, "")
-            scan_interval = user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-
-            try:
-                people = await _fetch_people(self.hass, host, api_key)
-                if not people:
-                    errors["base"] = "no_people"
-                else:
-                    self._host = host
-                    self._api_key = api_key
-                    self._scan_interval = scan_interval
-                    self._people = people
-                    return await self.async_step_people()
-            except aiohttp.ClientConnectorError:
+            host = user_input[CONF_CHORES_HOST].rstrip("/")
+            api_key = user_input.get(CONF_CHORES_API_KEY, "")
+            ok = await self._test_chores_connection(host, api_key)
+            if ok:
+                self._data[CONF_CHORES_HOST] = host
+                self._data[CONF_CHORES_API_KEY] = api_key
+                return await self.async_step_people()
+            else:
                 errors["base"] = "cannot_connect"
-            except aiohttp.ClientResponseError as err:
-                if err.status in (401, 403):
-                    errors["base"] = "invalid_auth"
-                else:
-                    errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error connecting to Hades API")
-                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_HOST, default="http://10.72.16.21:33911"): str,
-                    vol.Optional(CONF_API_KEY, default=""): str,
-                    vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
-                        vol.Coerce(int), vol.Range(min=30, max=3600)
-                    ),
-                }
-            ),
+            data_schema=vol.Schema({
+                vol.Required(CONF_CHORES_HOST, default="http://10.72.16.21:33911"): str,
+                vol.Optional(CONF_CHORES_API_KEY, default=""): str,
+            }),
             errors=errors,
         )
 
-    async def async_step_people(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.FlowResult:
-        """Step 2: Choose which people to track."""
-        errors: dict[str, str] = {}
-
-        people_options = {
-            str(p["id"]): p.get("display_name") or p["name"]
-            for p in self._people
-        }
-
+    async def async_step_people(self, user_input: dict | None = None) -> FlowResult:
+        """Step 2 — Select tracked people."""
         if user_input is not None:
-            tracked = user_input.get(CONF_TRACKED_PEOPLE, [])
-            if not tracked:
-                errors["base"] = "no_people"
-            else:
-                return await self.async_step_sensors(tracked_people=tracked)
+            self._data[CONF_TRACKED_PEOPLE] = user_input[CONF_TRACKED_PEOPLE]
+            return await self.async_step_calendars()
 
         return self.async_show_form(
             step_id="people",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_TRACKED_PEOPLE, default=list(people_options.keys())): cv.multi_select(
-                        people_options
-                    ),
-                }
-            ),
-            errors=errors,
+            data_schema=vol.Schema({
+                vol.Required(CONF_TRACKED_PEOPLE, default=CHORES_PEOPLE): vol.In(
+                    {p: p for p in CHORES_PEOPLE}
+                ),
+            }),
         )
 
-    async def async_step_sensors(
-        self,
-        user_input: dict[str, Any] | None = None,
-        tracked_people: list[str] | None = None,
-    ) -> config_entries.FlowResult:
-        """Step 3: Choose sensor types."""
-        if tracked_people is not None:
-            self._tracked_people = tracked_people
+    async def async_step_calendars(self, user_input: dict | None = None) -> FlowResult:
+        """Step 3 — Optionally add a first calendar."""
+        errors: dict = {}
 
         if user_input is not None:
-            await self.async_set_unique_id(self._host)
-            self._abort_if_unique_id_configured()
+            name = user_input.get(CONF_CALENDAR_NAME, "").strip()
+            url = user_input.get(CONF_CALENDAR_URL, "").strip()
 
-            return self.async_create_entry(
-                title=f"Hades Chores ({self._host})",
-                data={
-                    CONF_HOST: self._host,
-                    CONF_API_KEY: self._api_key,
-                    CONF_SCAN_INTERVAL: self._scan_interval,
-                    CONF_TRACKED_PEOPLE: self._tracked_people,
-                    CONF_ENABLE_TODAY: user_input.get(CONF_ENABLE_TODAY, DEFAULT_ENABLE_TODAY),
-                    CONF_ENABLE_LEADERBOARD: user_input.get(CONF_ENABLE_LEADERBOARD, DEFAULT_ENABLE_LEADERBOARD),
-                    CONF_ENABLE_UPCOMING: user_input.get(CONF_ENABLE_UPCOMING, DEFAULT_ENABLE_UPCOMING),
-                    CONF_ENABLE_COMPLETION_RATE: user_input.get(CONF_ENABLE_COMPLETION_RATE, DEFAULT_ENABLE_COMPLETION_RATE),
-                },
-            )
+            if name and url:
+                ok = await self._test_calendar_url(url)
+                if not ok:
+                    errors["base"] = "invalid_url"
+                else:
+                    self._data[CONF_CALENDARS] = [{"name": name, "url": url}]
+                    return self._create_entry()
+            else:
+                # Skip — no calendar added yet
+                self._data[CONF_CALENDARS] = []
+                return self._create_entry()
 
         return self.async_show_form(
-            step_id="sensors",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_ENABLE_TODAY, default=DEFAULT_ENABLE_TODAY): bool,
-                    vol.Optional(CONF_ENABLE_LEADERBOARD, default=DEFAULT_ENABLE_LEADERBOARD): bool,
-                    vol.Optional(CONF_ENABLE_UPCOMING, default=DEFAULT_ENABLE_UPCOMING): bool,
-                    vol.Optional(CONF_ENABLE_COMPLETION_RATE, default=DEFAULT_ENABLE_COMPLETION_RATE): bool,
-                }
-            ),
+            step_id="calendars",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_CALENDAR_NAME, default=""): str,
+                vol.Optional(CONF_CALENDAR_URL, default=""): str,
+            }),
+            errors=errors,
+            description_placeholders={},
         )
+
+    def _create_entry(self) -> FlowResult:
+        return self.async_create_entry(
+            title="Hades Household",
+            data=self._data,
+        )
+
+    async def _test_chores_connection(self, host: str, api_key: str) -> bool:
+        headers = {}
+        if api_key:
+            headers["x-api-key"] = api_key
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{host}/api/chores/summary/today",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    return resp.status < 400
+        except Exception:
+            return False
+
+    async def _test_calendar_url(self, url: str) -> bool:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    return resp.status < 400
+        except Exception:
+            return False
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
-        return HadesChoresOptionsFlow(config_entry)
+        return HadesHouseholdOptionsFlow(config_entry)
 
 
-class HadesChoresOptionsFlow(config_entries.OptionsFlow):
-    """Handle options (the Configure button after setup)."""
+class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
+    """Handle options (Configure button in HA UI)."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self.config_entry = config_entry
-        self._people: list[dict] = []
-
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.FlowResult:
-        """Show the options form."""
-        errors: dict[str, str] = {}
-        data = self.config_entry.data
-        options = self.config_entry.options
-
-        if user_input is not None:
-            # Fetch fresh people list before showing people selector
-            try:
-                self._people = await _fetch_people(
-                    self.hass,
-                    data[CONF_HOST],
-                    data.get(CONF_API_KEY, ""),
-                )
-                self._pending_options = user_input
-                return await self.async_step_people()
-            except Exception:
-                errors["base"] = "cannot_connect"
-
-        current_interval = options.get(
-            CONF_SCAN_INTERVAL, data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        self._calendars: list[dict] = list(
+            config_entry.options.get(
+                CONF_CALENDARS,
+                config_entry.data.get(CONF_CALENDARS, [])
+            )
+        )
+        self._people: list[str] = list(
+            config_entry.options.get(
+                CONF_TRACKED_PEOPLE,
+                config_entry.data.get(CONF_TRACKED_PEOPLE, CHORES_PEOPLE)
+            )
         )
 
-        return self.async_show_form(
+    async def async_step_init(self, user_input: dict | None = None) -> FlowResult:
+        """Show options menu."""
+        return self.async_show_menu(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_SCAN_INTERVAL, default=current_interval): vol.All(
-                        vol.Coerce(int), vol.Range(min=30, max=3600)
-                    ),
-                    vol.Optional(
-                        CONF_ENABLE_TODAY,
-                        default=options.get(CONF_ENABLE_TODAY, data.get(CONF_ENABLE_TODAY, DEFAULT_ENABLE_TODAY)),
-                    ): bool,
-                    vol.Optional(
-                        CONF_ENABLE_LEADERBOARD,
-                        default=options.get(CONF_ENABLE_LEADERBOARD, data.get(CONF_ENABLE_LEADERBOARD, DEFAULT_ENABLE_LEADERBOARD)),
-                    ): bool,
-                    vol.Optional(
-                        CONF_ENABLE_UPCOMING,
-                        default=options.get(CONF_ENABLE_UPCOMING, data.get(CONF_ENABLE_UPCOMING, DEFAULT_ENABLE_UPCOMING)),
-                    ): bool,
-                    vol.Optional(
-                        CONF_ENABLE_COMPLETION_RATE,
-                        default=options.get(CONF_ENABLE_COMPLETION_RATE, data.get(CONF_ENABLE_COMPLETION_RATE, DEFAULT_ENABLE_COMPLETION_RATE)),
-                    ): bool,
-                }
-            ),
+            menu_options=["add_calendar", "remove_calendar", "update_people"],
+        )
+
+    # ── Add calendar ──────────────────────────────────────────────────────────
+
+    async def async_step_add_calendar(self, user_input: dict | None = None) -> FlowResult:
+        errors: dict = {}
+
+        if user_input is not None:
+            name = user_input.get(CONF_CALENDAR_NAME, "").strip()
+            url = user_input.get(CONF_CALENDAR_URL, "").strip()
+            if name and url:
+                ok = await self._test_url(url)
+                if not ok:
+                    errors["base"] = "invalid_url"
+                else:
+                    # Remove existing with same name if any
+                    self._calendars = [c for c in self._calendars if c["name"] != name]
+                    self._calendars.append({"name": name, "url": url})
+                    return self._save()
+            else:
+                errors["base"] = "unknown"
+
+        return self.async_show_form(
+            step_id="add_calendar",
+            data_schema=vol.Schema({
+                vol.Required(CONF_CALENDAR_NAME): str,
+                vol.Required(CONF_CALENDAR_URL): str,
+            }),
             errors=errors,
         )
 
-    async def async_step_people(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.FlowResult:
-        """Let user update which people are tracked."""
-        data = self.config_entry.data
-        options = self.config_entry.options
+    # ── Remove calendar ───────────────────────────────────────────────────────
 
-        people_options = {
-            str(p["id"]): p.get("display_name") or p["name"]
-            for p in self._people
-        }
-
-        current_tracked = options.get(
-            CONF_TRACKED_PEOPLE, data.get(CONF_TRACKED_PEOPLE, list(people_options.keys()))
-        )
+    async def async_step_remove_calendar(self, user_input: dict | None = None) -> FlowResult:
+        if not self._calendars:
+            return self._save()
 
         if user_input is not None:
-            return self.async_create_entry(
-                title="",
-                data={
-                    **self._pending_options,
-                    CONF_TRACKED_PEOPLE: user_input.get(CONF_TRACKED_PEOPLE, current_tracked),
-                },
-            )
+            name = user_input.get(CONF_CALENDAR_NAME)
+            self._calendars = [c for c in self._calendars if c["name"] != name]
+            return self._save()
+
+        cal_names = {c["name"]: c["name"] for c in self._calendars}
+        return self.async_show_form(
+            step_id="remove_calendar",
+            data_schema=vol.Schema({
+                vol.Required(CONF_CALENDAR_NAME): vol.In(cal_names),
+            }),
+        )
+
+    # ── Update people ─────────────────────────────────────────────────────────
+
+    async def async_step_update_people(self, user_input: dict | None = None) -> FlowResult:
+        if user_input is not None:
+            self._people = user_input[CONF_TRACKED_PEOPLE]
+            return self._save()
 
         return self.async_show_form(
-            step_id="people",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_TRACKED_PEOPLE, default=current_tracked
-                    ): cv.multi_select(people_options),
-                }
-            ),
+            step_id="update_people",
+            data_schema=vol.Schema({
+                vol.Required(CONF_TRACKED_PEOPLE, default=self._people): vol.In(
+                    {p: p for p in CHORES_PEOPLE}
+                ),
+            }),
         )
+
+    def _save(self) -> FlowResult:
+        return self.async_create_entry(
+            title="",
+            data={
+                CONF_CALENDARS: self._calendars,
+                CONF_TRACKED_PEOPLE: self._people,
+            },
+        )
+
+    async def _test_url(self, url: str) -> bool:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    return resp.status < 400
+        except Exception:
+            return False

@@ -1,4 +1,4 @@
-"""Sensor platform for Hades Chores."""
+"""Sensors for Hades Household Integration."""
 from __future__ import annotations
 
 import logging
@@ -10,26 +10,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import HadesChoresCoordinator
 from .const import (
     DOMAIN,
     CONF_TRACKED_PEOPLE,
-    CONF_ENABLE_TODAY,
-    CONF_ENABLE_LEADERBOARD,
-    CONF_ENABLE_UPCOMING,
-    CONF_ENABLE_COMPLETION_RATE,
-    DEFAULT_ENABLE_TODAY,
-    DEFAULT_ENABLE_LEADERBOARD,
-    DEFAULT_ENABLE_UPCOMING,
-    DEFAULT_ENABLE_COMPLETION_RATE,
+    CONF_CALENDARS,
+    COORDINATOR_CHORES,
+    COORDINATOR_CALENDARS,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _get_option(entry: ConfigEntry, key: str, default: Any) -> Any:
-    """Get value from options first, then data, then default."""
-    return entry.options.get(key, entry.data.get(key, default))
 
 
 async def async_setup_entry(
@@ -37,262 +26,212 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Hades Chores sensors."""
-    coordinator: HadesChoresCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    tracked_ids = set(_get_option(entry, CONF_TRACKED_PEOPLE, []))
-    enable_today = _get_option(entry, CONF_ENABLE_TODAY, DEFAULT_ENABLE_TODAY)
-    enable_leaderboard = _get_option(entry, CONF_ENABLE_LEADERBOARD, DEFAULT_ENABLE_LEADERBOARD)
-    enable_upcoming = _get_option(entry, CONF_ENABLE_UPCOMING, DEFAULT_ENABLE_UPCOMING)
-    enable_completion = _get_option(entry, CONF_ENABLE_COMPLETION_RATE, DEFAULT_ENABLE_COMPLETION_RATE)
-
-    people = coordinator.data.get("people", [])
-    # Filter to only tracked people
-    tracked_people = [
-        p for p in people if str(p["id"]) in tracked_ids
-    ]
+    """Set up all Hades Household sensors."""
+    coordinators = hass.data[DOMAIN][entry.entry_id]
+    chores_coord = coordinators[COORDINATOR_CHORES]
+    calendar_coord = coordinators[COORDINATOR_CALENDARS]
 
     entities: list[SensorEntity] = []
 
+    # ── Chores sensors ────────────────────────────────────────────────────────
+    tracked_people = entry.data.get(CONF_TRACKED_PEOPLE, [])
     for person in tracked_people:
-        pid = person["id"]
-        name = person.get("display_name") or person["name"]
+        slug = person.lower()
+        entities.append(HadesChoresTodaySensor(chores_coord, person, slug))
+        entities.append(HadesCompletionRateSensor(chores_coord, person, slug))
 
-        if enable_today:
-            entities.append(HadesPersonTodaySensor(coordinator, entry, person))
+    entities.append(HadesLeaderboardSensor(chores_coord))
+    entities.append(HadesTodaySummarySensor(chores_coord))
 
-        if enable_completion:
-            entities.append(HadesPersonCompletionSensor(coordinator, entry, person))
+    # ── Calendar sensors ──────────────────────────────────────────────────────
+    calendars = entry.options.get(CONF_CALENDARS, entry.data.get(CONF_CALENDARS, []))
+    for cal in calendars:
+        entities.append(HadesCalendarTodaySensor(calendar_coord, cal["name"]))
 
-        if enable_upcoming:
-            entities.append(HadesPersonUpcomingSensor(coordinator, entry, person))
-
-    if enable_leaderboard:
-        entities.append(HadesLeaderboardSensor(coordinator, entry))
-
-    # Global today summary sensor (always added)
-    entities.append(HadesTodaySummarySensor(coordinator, entry))
-
-    async_add_entities(entities)
+    async_add_entities(entities, True)
 
 
-# ---------------------------------------------------------------------------
-# Base class
-# ---------------------------------------------------------------------------
+# ── Base ──────────────────────────────────────────────────────────────────────
 
 class HadesBaseSensor(CoordinatorEntity, SensorEntity):
-    """Base class for all Hades sensors."""
+    """Base class for Hades sensors."""
 
-    def __init__(self, coordinator: HadesChoresCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator, unique_suffix: str, name: str) -> None:
         super().__init__(coordinator)
-        self._entry = entry
+        self._attr_unique_id = f"hades_household_{unique_suffix}"
+        self._attr_name = name
+        self._attr_has_entity_name = False
 
     @property
     def device_info(self):
         return {
-            "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Hades Chores",
+            "identifiers": {(DOMAIN, "hades_household")},
+            "name": "Hades Household",
             "manufacturer": "Hades",
-            "model": "Chore Manager",
-            "entry_type": "service",
+            "model": "Household Integration",
         }
 
 
-# ---------------------------------------------------------------------------
-# Per-person: Today's chores
-# ---------------------------------------------------------------------------
+# ── Chores Sensors ────────────────────────────────────────────────────────────
 
-class HadesPersonTodaySensor(HadesBaseSensor):
-    """Number of pending chores today for a person."""
+class HadesChoresTodaySensor(HadesBaseSensor):
+    """Sensor for a person's chores today — state is # pending."""
 
-    def __init__(self, coordinator, entry, person: dict) -> None:
-        super().__init__(coordinator, entry)
-        self._person = person
-        self._pid = person["id"]
-        self._pname = person.get("display_name") or person["name"]
-        self._attr_unique_id = f"{entry.entry_id}_today_{self._pid}"
-        self._attr_name = f"Hades {self._pname} Chores Today"
-        self._attr_icon = "mdi:broom"
-        self._attr_native_unit_of_measurement = "chores"
+    def __init__(self, coordinator, person: str, slug: str) -> None:
+        super().__init__(coordinator, f"{slug}_chores_today", f"Hades {person} Chores Today")
+        self._slug = slug
 
     @property
-    def native_value(self) -> int:
-        today_by_person = self.coordinator.data.get("today_by_person", {})
-        chores = today_by_person.get(self._pid, [])
-        return sum(1 for c in chores if c.get("status") == "pending")
+    def state(self) -> int:
+        data = self.coordinator.data or {}
+        person_data = data.get(self._slug, {})
+        pending = person_data.get("pending", [])
+        return len(pending)
 
     @property
     def extra_state_attributes(self) -> dict:
-        today_by_person = self.coordinator.data.get("today_by_person", {})
-        chores = today_by_person.get(self._pid, [])
+        data = self.coordinator.data or {}
+        person_data = data.get(self._slug, {})
         return {
-            "person_id": self._pid,
-            "person_name": self._pname,
-            "total_chores": len(chores),
-            "pending": [
-                {
-                    "id": c["id"],
-                    "name": c["chore_name"],
-                    "due_time": c.get("due_time"),
-                    "points": c.get("points"),
-                }
-                for c in chores if c.get("status") == "pending"
-            ],
-            "completed": [
-                {
-                    "id": c["id"],
-                    "name": c["chore_name"],
-                    "completed_at": c.get("completed_at"),
-                    "points": c.get("points"),
-                }
-                for c in chores if c.get("status") == "completed"
-            ],
-            "skipped": [
-                c["chore_name"]
-                for c in chores if c.get("status") == "skipped"
-            ],
+            "pending": person_data.get("pending", []),
+            "completed": person_data.get("completed", []),
+            "skipped": person_data.get("skipped", []),
+            "total_chores": (
+                len(person_data.get("pending", [])) +
+                len(person_data.get("completed", [])) +
+                len(person_data.get("skipped", []))
+            ),
         }
 
+    @property
+    def icon(self) -> str:
+        return "mdi:checkbox-marked-circle-outline"
 
-# ---------------------------------------------------------------------------
-# Per-person: Completion rate
-# ---------------------------------------------------------------------------
 
-class HadesPersonCompletionSensor(HadesBaseSensor):
-    """Completion rate today for a person (0-100%)."""
+class HadesCompletionRateSensor(HadesBaseSensor):
+    """Sensor for a person's completion rate — state is 0-100."""
 
-    def __init__(self, coordinator, entry, person: dict) -> None:
-        super().__init__(coordinator, entry)
-        self._person = person
-        self._pid = person["id"]
-        self._pname = person.get("display_name") or person["name"]
-        self._attr_unique_id = f"{entry.entry_id}_completion_{self._pid}"
-        self._attr_name = f"Hades {self._pname} Completion Rate"
-        self._attr_icon = "mdi:percent"
-        self._attr_native_unit_of_measurement = "%"
+    def __init__(self, coordinator, person: str, slug: str) -> None:
+        super().__init__(coordinator, f"{slug}_completion_rate", f"Hades {person} Completion Rate")
+        self._slug = slug
 
     @property
-    def native_value(self) -> float:
-        rates = self.coordinator.data.get("completion_rates", {})
-        return rates.get(self._pid, 0.0)
+    def state(self) -> float:
+        data = self.coordinator.data or {}
+        person_data = data.get(self._slug, {})
+        completed = len(person_data.get("completed", []))
+        total = completed + len(person_data.get("pending", [])) + len(person_data.get("skipped", []))
+        if total == 0:
+            return 0
+        return round((completed / total) * 100, 1)
 
     @property
     def extra_state_attributes(self) -> dict:
-        people = self.coordinator.data.get("people", [])
-        person_data = next((p for p in people if p["id"] == self._pid), {})
+        data = self.coordinator.data or {}
+        person_data = data.get(self._slug, {})
         return {
-            "person_id": self._pid,
             "points_total": person_data.get("points_total", 0),
         }
 
-
-# ---------------------------------------------------------------------------
-# Per-person: Upcoming chores
-# ---------------------------------------------------------------------------
-
-class HadesPersonUpcomingSensor(HadesBaseSensor):
-    """Upcoming chores in the next 7 days for a person."""
-
-    def __init__(self, coordinator, entry, person: dict) -> None:
-        super().__init__(coordinator, entry)
-        self._person = person
-        self._pid = person["id"]
-        self._pname = person.get("display_name") or person["name"]
-        self._attr_unique_id = f"{entry.entry_id}_upcoming_{self._pid}"
-        self._attr_name = f"Hades {self._pname} Upcoming Chores"
-        self._attr_icon = "mdi:calendar-clock"
-        self._attr_native_unit_of_measurement = "chores"
+    @property
+    def unit_of_measurement(self) -> str:
+        return "%"
 
     @property
-    def native_value(self) -> int:
-        upcoming = self.coordinator.data.get("upcoming_by_person", {})
-        return len(upcoming.get(self._pid, []))
+    def icon(self) -> str:
+        return "mdi:percent"
 
-    @property
-    def extra_state_attributes(self) -> dict:
-        upcoming = self.coordinator.data.get("upcoming_by_person", {})
-        chores = upcoming.get(self._pid, [])
-        return {
-            "person_id": self._pid,
-            "person_name": self._pname,
-            "upcoming": [
-                {
-                    "name": c["chore_name"],
-                    "due_date": c.get("due_date"),
-                    "points": c.get("points"),
-                }
-                for c in chores
-            ],
-        }
-
-
-# ---------------------------------------------------------------------------
-# Global: Leaderboard
-# ---------------------------------------------------------------------------
 
 class HadesLeaderboardSensor(HadesBaseSensor):
-    """Points leaderboard — state is the current leader's name."""
+    """Leaderboard sensor — state is the leader's name."""
 
-    def __init__(self, coordinator, entry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_leaderboard"
-        self._attr_name = "Hades Points Leaderboard"
-        self._attr_icon = "mdi:trophy"
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "points_leaderboard", "Hades Points Leaderboard")
 
     @property
-    def native_value(self) -> str | None:
-        leaderboard = self.coordinator.data.get("leaderboard", [])
-        if not leaderboard:
-            return None
-        leader = leaderboard[0]
-        return leader.get("display_name") or leader.get("name", "Unknown")
+    def state(self) -> str:
+        data = self.coordinator.data or {}
+        rankings = data.get("leaderboard", {}).get("rankings", [])
+        if rankings:
+            return rankings[0].get("name", "Unknown")
+        return "Unknown"
 
     @property
     def extra_state_attributes(self) -> dict:
-        leaderboard = self.coordinator.data.get("leaderboard", [])
+        data = self.coordinator.data or {}
+        leaderboard = data.get("leaderboard", {})
         return {
-            "rankings": [
-                {
-                    "rank": i + 1,
-                    "name": p.get("display_name") or p.get("name"),
-                    "points": p.get("points_total", 0),
-                }
-                for i, p in enumerate(leaderboard)
-            ]
+            "rankings": leaderboard.get("rankings", []),
         }
 
+    @property
+    def icon(self) -> str:
+        return "mdi:trophy"
 
-# ---------------------------------------------------------------------------
-# Global: Today summary
-# ---------------------------------------------------------------------------
 
 class HadesTodaySummarySensor(HadesBaseSensor):
-    """Overall summary of today — total pending chores across everyone."""
+    """Summary sensor — state is total pending across all people."""
 
-    def __init__(self, coordinator, entry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_today_summary"
-        self._attr_name = "Hades Today Summary"
-        self._attr_icon = "mdi:clipboard-list"
-        self._attr_native_unit_of_measurement = "chores"
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "today_summary", "Hades Today Summary")
 
     @property
-    def native_value(self) -> int:
-        today = self.coordinator.data.get("today", [])
-        return sum(1 for c in today if c.get("status") == "pending")
+    def state(self) -> int:
+        data = self.coordinator.data or {}
+        summary = data.get("summary", {})
+        return summary.get("pending", 0)
 
     @property
     def extra_state_attributes(self) -> dict:
-        today = self.coordinator.data.get("today", [])
-        total = len(today)
-        completed = sum(1 for c in today if c.get("status") == "completed")
-        pending = sum(1 for c in today if c.get("status") == "pending")
-        skipped = sum(1 for c in today if c.get("status") == "skipped")
+        data = self.coordinator.data or {}
+        summary = data.get("summary", {})
         return {
-            "total": total,
-            "completed": completed,
-            "pending": pending,
-            "skipped": skipped,
-            "completion_percent": round((completed / total) * 100, 1) if total else 0,
-            "all_done": pending == 0 and total > 0,
+            "total": summary.get("total", 0),
+            "completed": summary.get("completed", 0),
+            "pending": summary.get("pending", 0),
+            "skipped": summary.get("skipped", 0),
+            "completion_percent": summary.get("completion_percent", 0),
+            "all_done": summary.get("all_done", False),
         }
+
+    @property
+    def icon(self) -> str:
+        return "mdi:clipboard-list"
+
+
+# ── Calendar Sensors ──────────────────────────────────────────────────────────
+
+class HadesCalendarTodaySensor(HadesBaseSensor):
+    """Sensor for a calendar's today events — state is event count."""
+
+    def __init__(self, coordinator, calendar_name: str) -> None:
+        slug = calendar_name.lower().replace(" ", "_")
+        super().__init__(
+            coordinator,
+            f"calendar_{slug}_today",
+            f"Hades Calendar {calendar_name} Today",
+        )
+        self._calendar_name = calendar_name
+
+    @property
+    def state(self) -> int:
+        data = self.coordinator.data or {}
+        cal_data = data.get(self._calendar_name, {})
+        return cal_data.get("event_count", 0)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        cal_data = data.get(self._calendar_name, {})
+        attrs = {
+            "events": cal_data.get("events", []),
+            "event_count": cal_data.get("event_count", 0),
+            "calendar_name": self._calendar_name,
+        }
+        if "error" in cal_data:
+            attrs["error"] = cal_data["error"]
+        return attrs
+
+    @property
+    def icon(self) -> str:
+        return "mdi:calendar-today"
