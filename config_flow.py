@@ -8,9 +8,10 @@ import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.helpers import config_validation as cv
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+import homeassistant.helpers.config_validation as cv
 
 from .const import (
     DOMAIN,
@@ -20,10 +21,25 @@ from .const import (
     CONF_CALENDARS,
     CONF_CALENDAR_NAME,
     CONF_CALENDAR_URL,
-    CHORES_PEOPLE,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _fetch_people(hass, host: str, api_key: str) -> list[dict]:
+    """Fetch people list from the Hades API."""
+    session = async_get_clientsession(hass)
+    headers = {}
+    if api_key:
+        headers["X-API-Key"] = api_key
+    url = f"{host.rstrip('/')}/api/people"
+    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        resp.raise_for_status()
+        data = await resp.json()
+        # Unwrap {success, data} envelope if present
+        if isinstance(data, dict) and "data" in data:
+            return data["data"]
+        return data
 
 
 class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -33,6 +49,7 @@ class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
+        self._people: list[dict] = []
 
     async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
         """Step 1 — Chores API connection."""
@@ -44,13 +61,25 @@ class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host = user_input[CONF_CHORES_HOST].rstrip("/")
             api_key = user_input.get(CONF_CHORES_API_KEY, "")
-            ok = await self._test_chores_connection(host, api_key)
-            if ok:
-                self._data[CONF_CHORES_HOST] = host
-                self._data[CONF_CHORES_API_KEY] = api_key
-                return await self.async_step_people()
-            else:
+            try:
+                people = await _fetch_people(self.hass, host, api_key)
+                if not people:
+                    errors["base"] = "cannot_connect"
+                else:
+                    self._data[CONF_CHORES_HOST] = host
+                    self._data[CONF_CHORES_API_KEY] = api_key
+                    self._people = people
+                    return await self.async_step_people()
+            except aiohttp.ClientConnectorError:
                 errors["base"] = "cannot_connect"
+            except aiohttp.ClientResponseError as err:
+                if err.status in (401, 403):
+                    errors["base"] = "invalid_auth"
+                else:
+                    errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected error connecting to Hades API")
+                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="user",
@@ -63,17 +92,31 @@ class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_people(self, user_input: dict | None = None) -> FlowResult:
         """Step 2 — Select tracked people."""
+        errors: dict = {}
+
+        # Build options dict from live API: {str(id): display_name}
+        people_options = {
+            str(p["id"]): p.get("display_name") or p["name"]
+            for p in self._people
+        }
+
         if user_input is not None:
-            self._data[CONF_TRACKED_PEOPLE] = user_input[CONF_TRACKED_PEOPLE]
-            return await self.async_step_calendars()
+            tracked = user_input.get(CONF_TRACKED_PEOPLE, [])
+            if not tracked:
+                errors["base"] = "cannot_connect"
+            else:
+                self._data[CONF_TRACKED_PEOPLE] = tracked
+                return await self.async_step_calendars()
 
         return self.async_show_form(
             step_id="people",
             data_schema=vol.Schema({
-                vol.Required(CONF_TRACKED_PEOPLE, default={p: True for p in CHORES_PEOPLE}): cv.multi_select(
-                    {p: p for p in CHORES_PEOPLE}
-                ),
+                vol.Required(
+                    CONF_TRACKED_PEOPLE,
+                    default=list(people_options.keys()),
+                ): cv.multi_select(people_options),
             }),
+            errors=errors,
         )
 
     async def async_step_calendars(self, user_input: dict | None = None) -> FlowResult:
@@ -85,14 +128,13 @@ class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             url = user_input.get(CONF_CALENDAR_URL, "").strip()
 
             if name and url:
-                ok = await self._test_calendar_url(url)
+                ok = await self._test_url(url)
                 if not ok:
                     errors["base"] = "invalid_url"
                 else:
                     self._data[CONF_CALENDARS] = [{"name": name, "url": url}]
                     return self._create_entry()
             else:
-                # Skip — no calendar added yet
                 self._data[CONF_CALENDARS] = []
                 return self._create_entry()
 
@@ -103,7 +145,6 @@ class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_CALENDAR_URL, default=""): str,
             }),
             errors=errors,
-            description_placeholders={},
         )
 
     def _create_entry(self) -> FlowResult:
@@ -112,28 +153,11 @@ class HadesHouseholdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data=self._data,
         )
 
-    async def _test_chores_connection(self, host: str, api_key: str) -> bool:
-        headers = {}
-        if api_key:
-            headers["x-api-key"] = api_key
+    async def _test_url(self, url: str) -> bool:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{host}/api/instances/today",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=8),
-                ) as resp:
-                    return resp.status < 400
-        except Exception:
-            return False
-
-    async def _test_calendar_url(self, url: str) -> bool:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
-                    return resp.status < 400
+            session = async_get_clientsession(self.hass)
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return resp.status < 400
         except Exception:
             return False
 
@@ -154,12 +178,7 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
                 config_entry.data.get(CONF_CALENDARS, [])
             )
         )
-        self._people: list[str] = list(
-            config_entry.options.get(
-                CONF_TRACKED_PEOPLE,
-                config_entry.data.get(CONF_TRACKED_PEOPLE, CHORES_PEOPLE)
-            )
-        )
+        self._people_fetched: list[dict] = []
 
     async def async_step_init(self, user_input: dict | None = None) -> FlowResult:
         """Show options menu."""
@@ -181,7 +200,6 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
                 if not ok:
                     errors["base"] = "invalid_url"
                 else:
-                    # Remove existing with same name if any
                     self._calendars = [c for c in self._calendars if c["name"] != name]
                     self._calendars.append({"name": name, "url": url})
                     return self._save()
@@ -219,34 +237,53 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
     # ── Update people ─────────────────────────────────────────────────────────
 
     async def async_step_update_people(self, user_input: dict | None = None) -> FlowResult:
-        if user_input is not None:
-            self._people = user_input[CONF_TRACKED_PEOPLE]
-            return self._save()
+        errors: dict = {}
+        data = self.config_entry.data
+
+        # Fetch fresh people list from API
+        if not self._people_fetched:
+            try:
+                self._people_fetched = await _fetch_people(
+                    self.hass,
+                    data[CONF_CHORES_HOST],
+                    data.get(CONF_CHORES_API_KEY, ""),
+                )
+            except Exception:
+                errors["base"] = "cannot_connect"
+
+        people_options = {
+            str(p["id"]): p.get("display_name") or p["name"]
+            for p in self._people_fetched
+        }
+
+        current = self.config_entry.options.get(
+            CONF_TRACKED_PEOPLE,
+            data.get(CONF_TRACKED_PEOPLE, list(people_options.keys())),
+        )
+
+        if user_input is not None and not errors:
+            return self._save(tracked=user_input.get(CONF_TRACKED_PEOPLE, current))
 
         return self.async_show_form(
             step_id="update_people",
             data_schema=vol.Schema({
-                vol.Required(CONF_TRACKED_PEOPLE, default={p: p in self._people for p in CHORES_PEOPLE}): cv.multi_select(
-                    {p: p for p in CHORES_PEOPLE}
+                vol.Required(CONF_TRACKED_PEOPLE, default=current): cv.multi_select(
+                    people_options
                 ),
             }),
+            errors=errors,
         )
 
-    def _save(self) -> FlowResult:
-        return self.async_create_entry(
-            title="",
-            data={
-                CONF_CALENDARS: self._calendars,
-                CONF_TRACKED_PEOPLE: self._people,
-            },
-        )
+    def _save(self, tracked: list | None = None) -> FlowResult:
+        data = {CONF_CALENDARS: self._calendars}
+        if tracked is not None:
+            data[CONF_TRACKED_PEOPLE] = tracked
+        return self.async_create_entry(title="", data=data)
 
     async def _test_url(self, url: str) -> bool:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
-                    return resp.status < 400
+            session = async_get_clientsession(self.hass)
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return resp.status < 400
         except Exception:
             return False
