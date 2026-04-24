@@ -14,11 +14,12 @@ const ACCENT_COLORS = {
 };
 
 const CARD_TYPES = {
-  person:      "Person Chores",
-  summary:     "Summary Bar",
-  leaderboard: "Leaderboard",
-  calendar:    "Calendar Events",
-  stat:        "Generic Stat",
+  person:            "Person Chores",
+  summary:           "Summary Bar",
+  leaderboard:       "Leaderboard",
+  calendar:          "Calendar (single source)",
+  combined_calendar: "Calendar (all sources)",
+  stat:              "Generic Stat",
 };
 
 // Default sizes
@@ -178,11 +179,12 @@ class HadesCard extends HTMLElement {
     let cardClass = "hades-card";
 
     switch (type) {
-      case "person":      inner = this._renderPerson();      break;
-      case "summary":     inner = this._renderSummary();     cardClass += " summary"; break;
-      case "leaderboard": inner = this._renderLeaderboard(); break;
-      case "calendar":    inner = this._renderCalendar();    break;
-      case "stat":        inner = this._renderStat();        break;
+      case "person":             inner = this._renderPerson();           break;
+      case "summary":            inner = this._renderSummary();          cardClass += " summary"; break;
+      case "leaderboard":        inner = this._renderLeaderboard();      break;
+      case "calendar":           inner = this._renderCalendar();         break;
+      case "combined_calendar":  inner = this._renderCombinedCalendar(); break;
+      case "stat":               inner = this._renderStat();             break;
       default:            inner = `<div class="no-chores">Unknown card type: ${type}</div>`;
     }
 
@@ -267,31 +269,103 @@ class HadesCard extends HTMLElement {
     return rows;
   }
 
-  // ── Calendar ────────────────────────────────────────────────────────────────
+  // ── Calendar (single source) ────────────────────────────────────────────────
 
   _renderCalendar() {
     const accent  = this._accent();
     const title   = this._config.display_name || "Today's Events";
-    const events  = this._attr(this._config.entity || "")?.events || [];
+    const attr    = this._attr(this._config.entity || "");
+    const events  = attr?.events || [];
+    const color   = attr?.color || accent.hex;
+
     let rows = `<div class="cal-title-bar">${title}</div>`;
     if (!events.length) {
       rows += `<div class="no-events">No events today</div>`;
     } else {
       events.forEach(e => {
-        const timeHtml = e.all_day
-          ? `<span class="cal-allday" style="background:${accent.hex}22;color:${accent.hex}">All Day</span>`
-          : `<span class="cal-time">${e.start}${e.end ? " – "+e.end : ""}</span>`;
-        rows += `
-          <div class="cal-row">
-            ${timeHtml}
-            <div class="col" style="flex:1">
-              <span class="cal-event-name">${e.title}</span>
-              ${e.location ? `<span class="cal-loc">📍 ${e.location}</span>` : ""}
-            </div>
-          </div>`;
+        rows += this._calEventRow(e, color, attr?.calendar_name || title);
       });
     }
     return rows;
+  }
+
+  // ── Combined Calendar (all sources merged) ───────────────────────────────────
+
+  _renderCombinedCalendar() {
+    const title = this._config.display_name || "Today";
+
+    // Collect all hades calendar sensors
+    const calEntities = Object.keys(this._hass.states)
+      .filter(id => id.startsWith("sensor.hades") && id.includes("calendar") && id.includes("today"))
+      .sort();
+
+    if (!calEntities.length) {
+      return `<div class="cal-title-bar">${title}</div><div class="no-events">No calendars configured</div>`;
+    }
+
+    // Build legend
+    const legend = [];
+    const allEvents = [];
+
+    calEntities.forEach(id => {
+      const attr  = this._hass.states[id]?.attributes || {};
+      const color = attr.color || "#E5E7EB";
+      const name  = attr.calendar_name || id;
+      const events = Array.isArray(attr.events) ? attr.events : [];
+
+      legend.push({ name, color });
+      events.forEach(e => allEvents.push({ ...e, _calName: name, _calColor: color }));
+    });
+
+    // Sort: all-day first, then by start time
+    allEvents.sort((a, b) => {
+      if (a.all_day && !b.all_day) return -1;
+      if (!a.all_day && b.all_day) return 1;
+      return (a.start || "").localeCompare(b.start || "");
+    });
+
+    // Legend HTML
+    const legendHtml = legend.map(l => `
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="width:10px;height:10px;border-radius:50%;background:${l.color};flex-shrink:0;display:inline-block"></span>
+        <span style="font-size:var(--sub);color:rgba(255,255,255,0.5)">${l.name}</span>
+      </div>`).join("");
+
+    // Events HTML
+    let eventsHtml = "";
+    if (!allEvents.length) {
+      eventsHtml = `<div class="no-events">No events today</div>`;
+    } else {
+      allEvents.forEach(e => {
+        eventsHtml += this._calEventRow(e, e._calColor, e._calName);
+      });
+    }
+
+    return `
+      <div class="cal-title-bar">${title}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.07)">
+        ${legendHtml}
+      </div>
+      ${eventsHtml}`;
+  }
+
+  _calEventRow(e, color, calName) {
+    const timeHtml = e.all_day
+      ? `<span class="cal-allday" style="background:${color}22;color:${color}">All Day</span>`
+      : `<span class="cal-time">${e.start}${e.end ? " – " + e.end : ""}</span>`;
+
+    return `
+      <div class="cal-row">
+        <div style="width:3px;align-self:stretch;background:${color};flex-shrink:0;border-radius:0"></div>
+        <div style="flex:1;min-width:0">
+          <span class="cal-event-name">${e.title}</span>
+          ${e.location ? `<div class="cal-loc">📍 ${e.location}</div>` : ""}
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+          ${timeHtml}
+          <span style="font-size:var(--sub);background:${color}22;color:${color};border-radius:20px;padding:1px 8px;white-space:nowrap">${calName}</span>
+        </div>
+      </div>`;
   }
 
   // ── Stat ────────────────────────────────────────────────────────────────────
