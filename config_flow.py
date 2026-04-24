@@ -187,6 +187,7 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
             )
         )
         self._people_fetched: list[dict] = []
+        self._edit_name: str = ""
 
     async def async_step_init(self, user_input: dict | None = None) -> FlowResult:
         """Show options menu."""
@@ -194,9 +195,50 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             menu_options={
                 "add_calendar":    "Add a calendar",
+                "edit_calendar":   "Edit a calendar",
                 "remove_calendar": "Remove a calendar",
                 "update_people":   "Update tracked people",
             },
+        )
+
+    # ── Edit calendar ─────────────────────────────────────────────────────────
+
+    async def async_step_edit_calendar(self, user_input: dict | None = None) -> FlowResult:
+        """Pick which calendar to edit."""
+        if not self._calendars:
+            return self._save()
+
+        if user_input is not None:
+            self._edit_name = user_input.get(CONF_CALENDAR_NAME)
+            return await self.async_step_edit_calendar_color()
+
+        cal_names = {c["name"]: c["name"] for c in self._calendars}
+        return self.async_show_form(
+            step_id="edit_calendar",
+            data_schema=vol.Schema({
+                vol.Required(CONF_CALENDAR_NAME): vol.In(cal_names),
+            }),
+        )
+
+    async def async_step_edit_calendar_color(self, user_input: dict | None = None) -> FlowResult:
+        """Edit the selected calendar's color."""
+        cal = next((c for c in self._calendars if c["name"] == self._edit_name), None)
+        if not cal:
+            return self._save()
+
+        if user_input is not None:
+            self._calendars = [
+                {**c, "color": user_input[CONF_CALENDAR_COLOR]}
+                if c["name"] == self._edit_name else c
+                for c in self._calendars
+            ]
+            return self._save()
+
+        return self.async_show_form(
+            step_id="edit_calendar_color",
+            data_schema=vol.Schema({
+                vol.Required(CONF_CALENDAR_COLOR, default=cal.get("color", "#3B82F6")): vol.In(CALENDAR_COLORS),
+            }),
         )
 
     # ── Add calendar ──────────────────────────────────────────────────────────
