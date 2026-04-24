@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Hades Chores",
+        "description": "Enter your Hades Chore API server details.",
+        "data": {
+          "host": "API Host URL",
+          "api_key": "API Key (optional)",
+          "scan_interval": "Poll interval (seconds)"
+        }
+      },
+      "people": {
+        "title": "Select People to Track",
+        "description": "Choose which household members to create sensors for.",
+        "data": {
+          "tracked_people": "People to track"
+        }
+      },
+      "sensors": {
+        "title": "Choose Sensor Types",
+        "description": "Select which data to expose as sensors.",
+        "data": {
+          "enable_today": "Today's chores per person",
+          "enable_leaderboard": "Points leaderboard",
+          "enable_upcoming": "Upcoming chores (7 days)",
+          "enable_completion_rate": "Completion rate per person"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the Hades API. Check the host URL.",
+      "invalid_auth": "Invalid API key.",
+      "no_people": "No people found in the Hades API.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "Hades Chores is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hades Chores Settings",
+        "data": {
+          "scan_interval": "Poll interval (seconds)",
+          "enable_today": "Today's chores per person",
+          "enable_leaderboard": "Points leaderboard",
+          "enable_upcoming": "Upcoming chores (7 days)",
+          "enable_completion_rate": "Completion rate per person"
+        }
+      },
+      "people": {
+        "title": "Update Tracked People",
+        "data": {
+          "tracked_people": "People to track"
+        }
+      }
+    }
+  }
+}
