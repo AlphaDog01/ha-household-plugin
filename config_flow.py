@@ -8,6 +8,7 @@ import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.helpers import config_validation as cv
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
@@ -225,7 +226,7 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="update_people",
             data_schema=vol.Schema({
-                vol.Required(CONF_TRACKED_PEOPLE, default=self._people): vol.In(
+                vol.Required(CONF_TRACKED_PEOPLE, default={p: p in self._people for p in CHORES_PEOPLE}): cv.multi_select(
                     {p: p for p in CHORES_PEOPLE}
                 ),
             }),
