@@ -245,9 +245,10 @@ class HadesCalendarTodaySensor(HadesBaseSensor):
         data = self.coordinator.data or {}
         cal_data = data.get(self._calendar_name, {})
         attrs = {
-            "events": cal_data.get("events", []),
-            "event_count": cal_data.get("event_count", 0),
+            "events":        cal_data.get("events", []),
+            "event_count":   cal_data.get("event_count", 0),
             "calendar_name": self._calendar_name,
+            "color":         cal_data.get("color", "#3B82F6"),
         }
         if "error" in cal_data:
             attrs["error"] = cal_data["error"]
