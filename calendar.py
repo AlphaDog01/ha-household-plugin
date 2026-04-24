@@ -56,7 +56,7 @@ class HadesCalendarEntity(CoordinatorEntity, CalendarEntity):
         self._filter     = cal_config.get("filter", "")
         slug = self._name.lower().replace(" ", "_")
         self._attr_unique_id = f"hades_household_calendar_{slug}"
-        self._attr_name      = f"Hades {self._name} Calendar"
+        self._attr_name      = self._name
 
     @property
     def device_info(self):
