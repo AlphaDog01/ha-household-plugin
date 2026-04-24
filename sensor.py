@@ -35,10 +35,14 @@ async def async_setup_entry(
 
     # ── Chores sensors ────────────────────────────────────────────────────────
     tracked_people = entry.data.get(CONF_TRACKED_PEOPLE, [])
-    for person in tracked_people:
-        slug = person.lower()
-        entities.append(HadesChoresTodaySensor(chores_coord, person, slug))
-        entities.append(HadesCompletionRateSensor(chores_coord, person, slug))
+    chores_data = chores_coord.data or {}
+
+    for person_id in tracked_people:
+        pid = str(person_id)
+        # Get display name from coordinator data (populated from /api/people)
+        display_name = chores_data.get(pid, {}).get("name", pid).title()
+        entities.append(HadesChoresTodaySensor(chores_coord, pid, display_name))
+        entities.append(HadesCompletionRateSensor(chores_coord, pid, display_name))
 
     entities.append(HadesLeaderboardSensor(chores_coord))
     entities.append(HadesTodaySummarySensor(chores_coord))
@@ -77,21 +81,21 @@ class HadesBaseSensor(CoordinatorEntity, SensorEntity):
 class HadesChoresTodaySensor(HadesBaseSensor):
     """Sensor for a person's chores today — state is # pending."""
 
-    def __init__(self, coordinator, person: str, slug: str) -> None:
-        super().__init__(coordinator, f"{slug}_chores_today", f"Hades {person} Chores Today")
-        self._slug = slug
+    def __init__(self, coordinator, person_id: str, display_name: str) -> None:
+        slug = display_name.lower().replace(" ", "_")
+        super().__init__(coordinator, f"{slug}_chores_today", f"Hades {display_name} Chores Today")
+        self._person_id = person_id
 
     @property
     def state(self) -> int:
         data = self.coordinator.data or {}
-        person_data = data.get(self._slug, {})
-        pending = person_data.get("pending", [])
-        return len(pending)
+        person_data = data.get(self._person_id, {})
+        return len(person_data.get("pending", []))
 
     @property
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.data or {}
-        person_data = data.get(self._slug, {})
+        person_data = data.get(self._person_id, {})
         return {
             "pending": person_data.get("pending", []),
             "completed": person_data.get("completed", []),
@@ -111,14 +115,15 @@ class HadesChoresTodaySensor(HadesBaseSensor):
 class HadesCompletionRateSensor(HadesBaseSensor):
     """Sensor for a person's completion rate — state is 0-100."""
 
-    def __init__(self, coordinator, person: str, slug: str) -> None:
-        super().__init__(coordinator, f"{slug}_completion_rate", f"Hades {person} Completion Rate")
-        self._slug = slug
+    def __init__(self, coordinator, person_id: str, display_name: str) -> None:
+        slug = display_name.lower().replace(" ", "_")
+        super().__init__(coordinator, f"{slug}_completion_rate", f"Hades {display_name} Completion Rate")
+        self._person_id = person_id
 
     @property
     def state(self) -> float:
         data = self.coordinator.data or {}
-        person_data = data.get(self._slug, {})
+        person_data = data.get(self._person_id, {})
         completed = len(person_data.get("completed", []))
         total = completed + len(person_data.get("pending", [])) + len(person_data.get("skipped", []))
         if total == 0:
@@ -128,7 +133,7 @@ class HadesCompletionRateSensor(HadesBaseSensor):
     @property
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.data or {}
-        person_data = data.get(self._slug, {})
+        person_data = data.get(self._person_id, {})
         return {
             "points_total": person_data.get("points_total", 0),
         }
