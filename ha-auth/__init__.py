@@ -63,7 +63,7 @@ class HadesAuthCallbackView(HomeAssistantView):
         self.config = config
 
     async def get(self, request):
-        from aiohttp.web import HTTPFound, Response
+        from aiohttp.web import Response
         code = request.query.get("code")
         if not code:
             return Response(text="Missing code", status=400)
@@ -96,7 +96,22 @@ class HadesAuthCallbackView(HomeAssistantView):
             _LOGGER.error("Hades Auth error: %s", e)
             return Response(text=f"Auth error: {e}", status=500)
 
-        return HTTPFound(f"/?auth_callback=1&token={access_token}")
+        return Response(
+            text=f"""
+            <html><body>
+            <script>
+                localStorage.setItem('hassTokens', JSON.stringify({{
+                    access_token: '{access_token}',
+                    token_type: 'Bearer',
+                    expires_in: 1800,
+                    hassUrl: window.location.origin
+                }}));
+                window.location = '/';
+            </script>
+            </body></html>
+            """,
+            content_type='text/html'
+        )
 
     async def _exchange_code(self, code):
         base_url = get_url(self.hass)
