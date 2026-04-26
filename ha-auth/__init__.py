@@ -2,11 +2,12 @@
 import logging
 import secrets
 from urllib.parse import urlencode
+from pathlib import Path
 import aiohttp
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.helpers.network import get_url
 
 from .const import DOMAIN
@@ -19,10 +20,39 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN] = entry.data
+
+    # Serve the frontend JS file
+    www_path = Path(__file__).parent / "www"
+    await hass.http.async_register_static_paths([
+        StaticPathConfig("/auth/hades/static", str(www_path), False)
+    ])
+
+    # Register frontend resource
+    hass.components.frontend.async_register_built_in_panel
+    await _async_register_frontend(hass)
+
+    # Register views
     hass.http.register_view(HadesLoginView(hass, entry.data))
     hass.http.register_view(HadesAuthCallbackView(hass, entry.data))
+
     _LOGGER.info("Hades Auth initialized")
     return True
+
+async def _async_register_frontend(hass: HomeAssistant):
+    """Register the frontend JS resource."""
+    try:
+        from homeassistant.components.lovelace.resources import ResourceStorageCollection
+        resources = hass.data.get("lovelace", {}).get("resources")
+        if resources:
+            existing = [r for r in resources.async_items() if "hades-auth-button" in r.get("url", "")]
+            if not existing:
+                await resources.async_create_item({
+                    "res_type": "module",
+                    "url": "/auth/hades/static/hades-auth-button.js"
+                })
+    except Exception as e:
+        _LOGGER.warning("Could not auto-register frontend resource: %s", e)
+        _LOGGER.info("Manually add /auth/hades/static/hades-auth-button.js as a JS module resource")
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
