@@ -47,7 +47,14 @@ async def async_setup_entry(
 
     entities.append(HadesLeaderboardSensor(chores_coord))
     entities.append(HadesTodaySummarySensor(chores_coord))
-
+    
+    # ── Reminder sensors ──────────────────────────────────────────────────────
+    reminders_coord = coordinators[COORDINATOR_REMINDERS]
+    for person_id in tracked_people:
+        pid = str(person_id)
+        display_name = chores_data.get(pid, {}).get("name", pid).title()
+        entities.append(HadesReminderSensor(reminders_coord, pid, display_name))
+        
     # ── Calendar sensors ──────────────────────────────────────────────────────
     calendars = entry.options.get(CONF_CALENDARS, entry.data.get(CONF_CALENDARS, []))
     for cal in calendars:
@@ -258,3 +265,39 @@ class HadesCalendarTodaySensor(HadesBaseSensor):
     @property
     def icon(self) -> str:
         return "mdi:calendar-today"
+
+class HadesReminderSensor(HadesBaseSensor):
+    """Sensor for a person's active reminder — state is reminder text or empty."""
+
+    def __init__(self, coordinator, person_id: str, display_name: str) -> None:
+        slug = display_name.lower().replace(" ", "_")
+        super().__init__(
+            coordinator,
+            f"{slug}_reminder",
+            f"Hades {display_name} Reminder",
+        )
+        self._person_id = person_id
+
+    @property
+    def state(self) -> str:
+        data = self.coordinator.data or {}
+        reminder = data.get(self._person_id)
+        if reminder:
+            return reminder["text"]
+        return ""
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        reminder = data.get(self._person_id)
+        if reminder:
+            return {
+                "active": True,
+                "reminder_id": reminder["id"],
+                "created_at": reminder.get("created_at"),
+            }
+        return {"active": False}
+
+    @property
+    def icon(self) -> str:
+        return "mdi:bell-ring" if self.state else "mdi:bell-off"
