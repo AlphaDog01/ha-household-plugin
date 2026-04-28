@@ -50,6 +50,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    # ── Register services ─────────────────────────────────────────────────────
+    async def handle_set_reminder(call):
+        person_id = call.data["person_id"]
+        text = call.data["text"]
+        host = entry.data[CONF_CHORES_HOST].rstrip("/")
+        api_key = entry.data.get(CONF_CHORES_API_KEY, "")
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["x-api-key"] = api_key
+        session = async_get_clientsession(hass)
+        try:
+            async with session.post(
+                f"{host}/api/reminders/{person_id}",
+                json={"text": text},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp.raise_for_status()
+                _LOGGER.info("Reminder set for person %s: %s", person_id, text)
+        except Exception as err:
+            _LOGGER.error("Failed to set reminder for person %s: %s", person_id, err)
+        # Force immediate poll so sensor updates right away
+        await reminders_coordinator.async_refresh()
+
+    async def handle_clear_reminder(call):
+        person_id = call.data["person_id"]
+        host = entry.data[CONF_CHORES_HOST].rstrip("/")
+        api_key = entry.data.get(CONF_CHORES_API_KEY, "")
+        headers = {}
+        if api_key:
+            headers["x-api-key"] = api_key
+        session = async_get_clientsession(hass)
+        try:
+            async with session.delete(
+                f"{host}/api/reminders/{person_id}",
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp.raise_for_status()
+                _LOGGER.info("Reminder cleared for person %s", person_id)
+        except Exception as err:
+            _LOGGER.error("Failed to clear reminder for person %s: %s", person_id, err)
+        # Force immediate poll so sensor updates right away
+        await reminders_coordinator.async_refresh()
+
+    hass.services.async_register(DOMAIN, "set_reminder", handle_set_reminder)
+    hass.services.async_register(DOMAIN, "clear_reminder", handle_clear_reminder)
+
+    return True
     return True
 
 
