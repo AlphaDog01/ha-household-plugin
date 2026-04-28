@@ -16,6 +16,7 @@ from .const import (
     CONF_CALENDARS,
     COORDINATOR_CHORES,
     COORDINATOR_CALENDARS,
+    COORDINATOR_REMINDERS,
 )
 
 _LOGGER = logging.getLogger(__name__)
