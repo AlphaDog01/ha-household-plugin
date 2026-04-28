@@ -20,6 +20,8 @@ from .const import (
     CALENDAR_UPDATE_INTERVAL,
     COORDINATOR_CHORES,
     COORDINATOR_CALENDARS,
+    COORDINATOR_REMINDERS,     
+    REMINDERS_UPDATE_INTERVAL, 
 )
 
 _LOGGER = logging.getLogger(__name__)
