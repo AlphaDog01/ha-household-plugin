@@ -132,7 +132,7 @@ class HadesCompletionRateSensor(HadesBaseSensor):
             return 0
         return round((completed / total) * 100, 1)
 
-     @property
+    @property
     def extra_state_attributes(self) -> dict:
         data        = self.coordinator.data or {}
         person_data = data.get(self._person_id, {})
