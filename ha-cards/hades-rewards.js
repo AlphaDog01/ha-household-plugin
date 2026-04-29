@@ -205,10 +205,15 @@ class HadesRewards extends HTMLElement {
   _titleSize() { return parseFloat(this._config.title_size    ?? 18); }
   _subSize()   { return parseFloat(this._config.subtitle_size ?? REWARDS_DEFAULT_SIZE); }
 
-  _personPoints() {
+_personPoints() {
     const stateObj = this._hass?.states?.[this._config.person_entity];
     return parseInt(stateObj?.attributes?.points_total ?? 0);
-  }
+}
+
+_personId() {
+    const stateObj = this._hass?.states?.[this._config.person_entity];
+    return stateObj?.attributes?.person_id ?? this._config.person_id;
+}
 
   _rewards() {
     // Pull rewards from the chores coordinator data via the leaderboard sensor attributes
