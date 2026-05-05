@@ -567,8 +567,16 @@ class HadesCardEditor extends HTMLElement {
     this._hass   = null;
   }
 
-  setConfig(config) { this._config = { ...config }; this._render(); }
-  set hass(hass)    { this._hass = hass; this._render(); }
+  setConfig(config) {
+    const prev = JSON.stringify(this._config);
+    this._config = { ...config };
+    // Only re-render if card_type changed (needs different fields shown)
+    // or if this is the first render (shadowRoot is empty)
+    if (!this.shadowRoot.innerHTML || config.card_type !== JSON.parse(prev || "{}").card_type) {
+      this._render();
+    }
+  }
+  set hass(hass) { this._hass = hass; if (!this.shadowRoot.innerHTML) this._render(); }
 
   _fire(config) {
     this.dispatchEvent(new CustomEvent("config-changed", {
@@ -766,7 +774,10 @@ class HadesCardEditor extends HTMLElement {
       el.addEventListener("click", () => {
         this._config = { ...this._config, accent: el.dataset.accent };
         this._fire(this._config);
-        this._render();
+        // Update swatch active states in place without full re-render
+        this.shadowRoot.querySelectorAll(".swatch").forEach(s => {
+          s.style.outline = s.dataset.accent === el.dataset.accent ? "2px solid #fff" : "none";
+        });
       });
     });
   }
