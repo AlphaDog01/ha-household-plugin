@@ -215,23 +215,25 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             meal_host = user_input.get(CONF_MEAL_HOST, "").strip()
             if meal_host:
-                # Quick connectivity test
                 try:
                     session = async_get_clientsession(self.hass)
                     async with session.get(
                         f"{meal_host.rstrip('/')}/api/today",
                         timeout=aiohttp.ClientTimeout(total=5)
                     ) as resp:
-                        if resp.status not in (200, 404):  # 404 is ok (no plan set)
+                        if resp.status not in (200, 404):
                             errors["base"] = "cannot_connect"
                 except Exception:
                     errors["base"] = "cannot_connect"
 
             if not errors:
-                # Persist to config entry data (not options — it's a core setting)
+                # Update entry data and schedule a reload so the coordinator starts
                 new_data = {**self._entry.data, CONF_MEAL_HOST: meal_host}
                 self.hass.config_entries.async_update_entry(self._entry, data=new_data)
-                return self._save()
+                self.hass.async_create_task(
+                    self.hass.config_entries.async_reload(self._entry.entry_id)
+                )
+                return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
             step_id="update_meal_host",
