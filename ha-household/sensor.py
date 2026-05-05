@@ -14,9 +14,11 @@ from .const import (
     DOMAIN,
     CONF_TRACKED_PEOPLE,
     CONF_CALENDARS,
+    CONF_MEAL_HOST,
     COORDINATOR_CHORES,
     COORDINATOR_CALENDARS,
     COORDINATOR_REMINDERS,
+    COORDINATOR_MEALS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +55,11 @@ async def async_setup_entry(
     calendars = entry.options.get(CONF_CALENDARS, entry.data.get(CONF_CALENDARS, []))
     for cal in calendars:
         entities.append(HadesCalendarTodaySensor(calendar_coord, cal["name"]))
+
+    # ── Meal sensor ───────────────────────────────────────────────────────────
+    meal_host = entry.data.get(CONF_MEAL_HOST, "")
+    if meal_host and COORDINATOR_MEALS in coordinators:
+        entities.append(HadesMealTodaySensor(coordinators[COORDINATOR_MEALS]))
 
     async_add_entities(entities, True)
 
@@ -191,10 +198,7 @@ class HadesLeaderboardSensor(HadesBaseSensor):
 
 
 class HadesTodaySummarySensor(HadesBaseSensor):
-    """Summary sensor — state is total pending across all people.
-    Also exposes chores list, rewards catalog, and full people list
-    as attributes so management dashboard cards can read them.
-    """
+    """Summary sensor — state is total pending across all people."""
 
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator, "today_summary", "Hades Today Summary")
@@ -216,7 +220,6 @@ class HadesTodaySummarySensor(HadesBaseSensor):
             "skipped":            summary.get("skipped", 0),
             "completion_percent": summary.get("completion_percent", 0),
             "all_done":           summary.get("all_done", False),
-            # Exposed for management dashboard and rewards card
             "chores":             data.get("chores", []),
             "rewards":            data.get("rewards", []),
             "people":             data.get("people", []),
@@ -303,3 +306,45 @@ class HadesCalendarTodaySensor(HadesBaseSensor):
     @property
     def icon(self) -> str:
         return "mdi:calendar-today"
+
+
+# ── Meal Sensor ───────────────────────────────────────────────────────────────
+
+class HadesMealTodaySensor(HadesBaseSensor):
+    """Sensor for today's meal from the Hades Meal Planner.
+
+    State: meal title string (e.g. "Crockpot Salsa Chicken & Cauliflower Rice")
+    Attributes: day_number, method, portions, photo (base64), ingredients, steps,
+                diabetic_note, prep_notes, weekend, repeat, plan_name, start_date
+    """
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "meal_today", "Hades Meal Today")
+
+    @property
+    def state(self) -> str:
+        data = self.coordinator.data or {}
+        return data.get("title", "No meal plan")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        return {
+            "day_number":   data.get("day_number"),
+            "plan_name":    data.get("plan_name"),
+            "start_date":   data.get("start_date"),
+            "weekend":      data.get("weekend", False),
+            "repeat":       data.get("repeat", False),
+            "emoji":        data.get("emoji", "🍽"),
+            "method":       data.get("method"),
+            "portions":     data.get("portions", 7),
+            "photo":        data.get("photo"),          # base64 data URI
+            "diabetic_note":data.get("diabetic_note"),
+            "prep_notes":   data.get("prep_notes"),
+            "ingredients":  data.get("ingredients", []),
+            "steps":        data.get("steps", []),
+        }
+
+    @property
+    def icon(self) -> str:
+        return "mdi:silverware-fork-knife"
