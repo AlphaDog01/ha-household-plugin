@@ -227,13 +227,10 @@ class HadesHouseholdOptionsFlow(config_entries.OptionsFlow):
                     errors["base"] = "cannot_connect"
 
             if not errors:
-                # Update entry data and schedule a reload so the coordinator starts
-                new_data = {**self._entry.data, CONF_MEAL_HOST: meal_host}
-                self.hass.config_entries.async_update_entry(self._entry, data=new_data)
                 self.hass.async_create_task(
                     self.hass.config_entries.async_reload(self._entry.entry_id)
                 )
-                return self.async_create_entry(title="", data={})
+                return self.async_create_entry(title="", data={**self._entry.options, CONF_MEAL_HOST: meal_host})
 
         return self.async_show_form(
             step_id="update_meal_host",
