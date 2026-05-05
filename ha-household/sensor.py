@@ -56,13 +56,10 @@ async def async_setup_entry(
     for cal in calendars:
         entities.append(HadesCalendarTodaySensor(calendar_coord, cal["name"]))
 
-    # ── Meal sensors (optional — only if meal_host configured) ───────────────
+    # ── Meal sensor (optional — only if meal_host configured) ────────────────
     meal_host = entry.data.get(CONF_MEAL_HOST, "")
     if meal_host and COORDINATOR_MEALS in coordinators:
-        meal_coord = coordinators[COORDINATOR_MEALS]
-        entities.append(HadesMealTodaySensor(meal_coord))
-        entities.append(HadesRecipesSensor(meal_coord))
-        entities.append(HadesMealPlanSensor(meal_coord))
+        entities.append(HadesMealTodaySensor(coordinators[COORDINATOR_MEALS]))
 
     async_add_entities(entities, True)
 
@@ -314,7 +311,7 @@ class HadesCalendarTodaySensor(HadesBaseSensor):
 # ── Meal Sensors ──────────────────────────────────────────────────────────────
 
 class HadesMealTodaySensor(HadesBaseSensor):
-    """Today's meal — state is the meal title, attributes have full detail."""
+    """Today's meal — state is the meal title."""
 
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator, "meal_today", "Hades Meal Today")
@@ -330,19 +327,8 @@ class HadesMealTodaySensor(HadesBaseSensor):
     def extra_state_attributes(self) -> dict:
         d = self._today()
         return {
-            "day_number":    d.get("day_number"),
-            "plan_name":     d.get("plan_name"),
-            "start_date":    d.get("start_date"),
-            "weekend":       d.get("weekend", False),
-            "repeat":        d.get("repeat", False),
-            "emoji":         d.get("emoji", "🍽"),
-            "method":        d.get("method"),
-            "portions":      d.get("portions", 7),
-            "photo":         d.get("photo"),
-            "diabetic_note": d.get("diabetic_note"),
-            "prep_notes":    d.get("prep_notes"),
-            "ingredients":   d.get("ingredients", []),
-            "steps":         d.get("steps", []),
+            "photo":  d.get("photo"),
+            "method": d.get("method"),
         }
 
     @property
