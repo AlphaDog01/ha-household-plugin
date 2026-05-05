@@ -41,5 +41,10 @@ COORDINATOR_CHORES    = "chores"
 COORDINATOR_CALENDARS = "calendars"
 
 # ── Reminders ─────────────────────────────────────────────────────────────────
-COORDINATOR_REMINDERS   = "reminders"
+COORDINATOR_REMINDERS     = "reminders"
 REMINDERS_UPDATE_INTERVAL = 1  # minutes — poll frequently so notifications fire fast
+
+# ── Meal Planner ──────────────────────────────────────────────────────────────
+CONF_MEAL_HOST          = "meal_host"
+COORDINATOR_MEALS       = "meals"
+MEALS_UPDATE_INTERVAL   = 10  # minutes
