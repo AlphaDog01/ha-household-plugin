@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     # ── Meal coordinator (optional — only if meal_host configured) ────────────
-    meal_host = entry.data.get(CONF_MEAL_HOST, "").strip()
+    meal_host = entry.options.get(CONF_MEAL_HOST, entry.data.get(CONF_MEAL_HOST, "")).strip()
     if meal_host:
         meal_coordinator = HadesMealCoordinator(hass, meal_host)
         await meal_coordinator.async_config_entry_first_refresh()
